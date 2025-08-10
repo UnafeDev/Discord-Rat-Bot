@@ -1,0 +1,1 @@
+pip install discord.py pyautogui opencv-python requests psutil pynput numpy mss sounddevice pyperclip pillow imageio-ffmpeg pyttsx3 pycaw screen-brightness-control setproctitle certifi pywin32 comtypes
