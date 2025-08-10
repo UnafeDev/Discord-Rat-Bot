@@ -54,6 +54,7 @@ FFMPEG_PATH = imageio_ffmpeg.get_ffmpeg_exe()
 # ---------------------------------------------------------------------------
 VOICE_CHANNEL_ID = 00000000000000000000 # Replace with your voice channel ID
 READY_ID = 00000000000000000000 # Replace with your channel ID
+BOT_TOKEN = 'your token' # Replace with your bot token
 # ---------------------------------------------------------------------------
 
 intents = discord.Intents.default()
@@ -1192,6 +1193,4 @@ async def draw(ctx, shape: str, *args):
     overlay_thread = threading.Thread(target=run_overlay, args=(shapes,), daemon=True)
     overlay_thread.start()
 
-# Dont ask why it's in a string
-other_hook = 'your token'
-bot.run(other_hook)
+bot.run(BOT_TOKEN)
