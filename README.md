@@ -8,6 +8,9 @@ I am not responsible for any damages or consequences that may come from its use.
 
 I take no part in, nor do I endorse, any activities you choose to perform or add with this tool.
 
+# Note
+There will not be any releases as when compiled, it will automatically use the inputted token; Not yours.
+
 # Usage 
 
 This is a script that when run on the host, will send a connected message in the discord channel (change the ID and token within the script)
